@@ -24,6 +24,7 @@
  Additional options:
  - `--model path/to/model.joblib`: Use a pre-trained model
  - `--save-model path/to/save/model.joblib`: Save the trained model after running
+ - `--initial-packets`: Number of packets for the initial training (Default: 10000)
 
  ## Disclaimer
 

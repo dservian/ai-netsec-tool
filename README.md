@@ -1,5 +1,7 @@
  This tool uses an Isolation Forest algorithm to identify unusual patterns in network traffic. It begins by collecting data and training a model. After that, it continuously monitors the network in real time.
 
+ ![Demo screenshot](/screenshots/Screenshot.png)
+
  ## Installation
 
  1. Clone this repository:

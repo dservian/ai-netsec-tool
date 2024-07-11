@@ -13,6 +13,8 @@ import threading
 import time
 import argparse
 import logging
+from typing import Dict, Any, List
+from dataclasses import dataclass, asdict
 
 # Set up parameters
 REPORT_INTERVAL_SECONDS = 5 
@@ -20,41 +22,53 @@ REPORT_INTERVAL_SECONDS = 5
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+@dataclass
+class PacketFeatures:
+    time: float
+    size: float
+    protocol: str
+    src_ip: str
+    dst_ip: str
+    src_port: float
+    dst_port: float
+    http_method: str
+    http_host: str
+    http_path: str
+
 class NetworkSecurityTool:
-    def __init__(self, interface, model_path=None, initial_training_packets=10000):
+    def __init__(self, interface: str, model_path: str = None, initial_training_packets: int = 10000):
         self.interface = interface
-        self.packet_buffer = []
-        self.anomaly_buffer = []
+        self.packet_buffer: List[Dict[str, Any]] = []
+        self.anomaly_buffer: List[Dict[str, Any]] = []
         self.preprocessor = self.create_preprocessor()
         self.is_preprocessor_fitted = False
         self.initial_training_packets = initial_training_packets
         self.model = self.load_model(model_path) if model_path else self.train_new_model()
         self.is_capturing = False
 
-    def capture_packets(self):
+    def capture_packets(self) -> None:
         """Continuously capture packets"""
         self.is_capturing = True
         while self.is_capturing:
             packet = scapy.sniff(iface=self.interface, count=1)[0]
-            self.packet_buffer.append(self.extract_features(packet))
+            self.packet_buffer.append(asdict(self.extract_features(packet)))
 
-    def extract_features(self, packet):
+    def extract_features(self, packet: scapy.Packet) -> PacketFeatures:
         """Extract relevant features from a packet"""
-        features = {
-            'time': float(packet.time),
-            'size': float(len(packet)),
-            'protocol': packet.name,
-            'src_ip': packet[scapy.IP].src if packet.haslayer(scapy.IP) else 'Unknown',
-            'dst_ip': packet[scapy.IP].dst if packet.haslayer(scapy.IP) else 'Unknown',
-            'src_port': float(packet.sport) if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else np.nan,
-            'dst_port': float(packet.dport) if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else np.nan,
-            'http_method': packet[http.HTTPRequest].Method.decode() if packet.haslayer(http.HTTPRequest) else 'Unknown',
-            'http_host': packet[http.HTTPRequest].Host.decode() if packet.haslayer(http.HTTPRequest) else 'Unknown',
-            'http_path': packet[http.HTTPRequest].Path.decode() if packet.haslayer(http.HTTPRequest) else 'Unknown',
-        }
-        return features
+        return PacketFeatures(
+            time=float(packet.time),
+            size=float(len(packet)),
+            protocol=packet.name,
+            src_ip=packet[scapy.IP].src if packet.haslayer(scapy.IP) else 'Unknown',
+            dst_ip=packet[scapy.IP].dst if packet.haslayer(scapy.IP) else 'Unknown',
+            src_port=float(packet.sport) if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else np.nan,
+            dst_port=float(packet.dport) if packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP) else np.nan,
+            http_method=packet[http.HTTPRequest].Method.decode() if packet.haslayer(http.HTTPRequest) else 'Unknown',
+            http_host=packet[http.HTTPRequest].Host.decode() if packet.haslayer(http.HTTPRequest) else 'Unknown',
+            http_path=packet[http.HTTPRequest].Path.decode() if packet.haslayer(http.HTTPRequest) else 'Unknown',
+        )
 
-    def create_preprocessor(self):
+    def create_preprocessor(self) -> ColumnTransformer:
         """Create a preprocessing pipeline"""
         categorical_features = ['protocol', 'src_ip', 'dst_ip', 'http_method', 'http_host', 'http_path']
         numerical_features = ['time', 'size', 'src_port', 'dst_port']
@@ -69,22 +83,20 @@ class NetworkSecurityTool:
             ('scaler', StandardScaler())
         ])
 
-        preprocessor = ColumnTransformer(
+        return ColumnTransformer(
             transformers=[
                 ('num', numerical_transformer, numerical_features),
                 ('cat', categorical_transformer, categorical_features)
             ])
 
-        return preprocessor
-
-    def is_preprocessor_fitted(self):
+    def is_preprocessor_fitted(self) -> bool:
         try:
             self.preprocessor.transform(pd.DataFrame())
             return True
         except NotFittedError:
             return False
 
-    def preprocess_data(self, data):
+    def preprocess_data(self, data: List[Dict[str, Any]]) -> np.ndarray:
         """Preprocess the extracted features"""
         df = pd.DataFrame(data)
         
@@ -92,14 +104,13 @@ class NetworkSecurityTool:
             self.preprocessor.fit(df)
             self.is_preprocessor_fitted = True
 
-        preprocessed_data = self.preprocessor.transform(df)
-        return preprocessed_data
+        return self.preprocessor.transform(df)
 
-    def train_new_model(self):
+    def train_new_model(self) -> IsolationForest:
         """Train a new Isolation Forest model"""
         logging.info(f"Capturing {self.initial_training_packets} packets for initial model training...")
         initial_packets = scapy.sniff(iface=self.interface, count=self.initial_training_packets)
-        data = [self.extract_features(packet) for packet in initial_packets]
+        data = [asdict(self.extract_features(packet)) for packet in initial_packets]
         preprocessed_data = self.preprocess_data(data)
         
         model = IsolationForest(contamination=0.1, random_state=42)
@@ -107,17 +118,17 @@ class NetworkSecurityTool:
         logging.info("New model trained successfully.")
         return model
 
-    def load_model(self, model_path):
+    def load_model(self, model_path: str) -> IsolationForest:
         """Load a pre-trained model"""
         logging.info(f"Loading model from {model_path}")
         return joblib.load(model_path)
 
-    def save_model(self, model_path):
+    def save_model(self, model_path: str) -> None:
         """Save the current model"""
         joblib.dump(self.model, model_path)
         logging.info(f"Model saved to {model_path}")
 
-    def detect_anomalies(self):
+    def detect_anomalies(self) -> None:
         """Detect anomalies in the packet buffer"""
         if not self.packet_buffer:
             return
@@ -138,7 +149,7 @@ class NetworkSecurityTool:
             logging.error(f"Error in detect_anomalies: {str(e)}")
             self.packet_buffer.clear()
 
-    def start(self):
+    def start(self) -> None:
         """Start the network security tool"""
         capture_thread = threading.Thread(target=self.capture_packets)
         capture_thread.start()
@@ -152,12 +163,12 @@ class NetworkSecurityTool:
         
         capture_thread.join()
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the network security tool"""
         self.is_capturing = False
         logging.info("Stopping network capture...")
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="AI-Powered Network Security Tool")
     parser.add_argument("--interface", required=True, help="Network interface to monitor")
     parser.add_argument("--initial-packets", type=int, default=10000, help="Number of packets for the initial training")
